@@ -94,7 +94,29 @@ function cell(k, v) {
   if (['Status', 'Kepesertaan'].includes(k) && BG[v]) return `<span class="bd ${BG[v]}">${esc(v)}</span>`;
   return esc(v);
 }
-const WT = { Alamat: 220, Nama: 160, Pasien: 160, Keluarga: 160, RS: 170, Data: 280, Waktu: 150, Email: 170, Hak: 180, Menu: 220 };
+const WT = { Nama: 150, Alamat: 200, Pasien: 150, Keluarga: 140, RS: 170, Data: 260, Waktu: 130, Email: 160, Hak: 150, Menu: 180, _a: 190, Umur: 60, JK: 80, Golda: 70, Jumlah: 70, Kota: 110, Status: 110, Kepesertaan: 140, DonorTerakhir: 120, TglButuh: 120, Komponen: 100, Ruangan: 100, User: 110, Aksi: 160 };
+// Lebar kolom otomatis: mengisi lebar wadah (melebar/menyempit mengikuti layar); kolom yang sudah diatur pengguna dipertahankan
+function fitW(id) {
+  const t = TB[id], cl = t.cols.concat(t.act ? [['_a', 'Aksi']] : []), w = c => WT[c] || 100;
+  const mn = c => Math.max(56, Math.min(96, Math.max(...String(c[1]).split(/\s+/).map(s => s.length)) * 8 + 22)); // minimal kolom (judul panjang boleh terpotong baris)
+  const sc = $(id).querySelector('.tscroll'), lebar = (sc ? sc.clientWidth : ($(id).clientWidth || 1000) - 17) - 4 - (t.pr ? 44 : 0);
+  const hasil = cl.map(c => CW[S.pg + '.' + c[0]] || 0); let sisa = lebar - hasil.reduce((a, v) => a + v, 0), bebas = cl.map((c, i) => i).filter(i => !hasil[i]);
+  while (bebas.length) { // bagi sisa lebar sesuai bobot; kolom yang lebih sempit dari minimalnya dikunci di minimal, sisanya dibagi ulang
+    const tot = bebas.reduce((a, i) => a + w(cl[i][0]), 0), kecil = bebas.filter(i => sisa * w(cl[i][0]) / tot < mn(cl[i]));
+    if (!kecil.length) { bebas.forEach(i => hasil[i] = Math.floor(sisa * w(cl[i][0]) / tot)); break; }
+    kecil.forEach(i => { hasil[i] = mn(cl[i]); sisa -= hasil[i]; }); bebas = bebas.filter(i => !kecil.includes(i));
+  }
+  return hasil;
+}
+function refit() { // sesuaikan ulang semua tabel yang tampil (saat jendela diubah ukurannya / tombol Sesuaikan lebar)
+  Object.keys(TB).forEach(id => {
+    const el = $(id), tb = el && el.querySelector('table'); if (!tb) return;
+    const wd = fitW(id); tb.querySelectorAll('col[data-k]').forEach((c, i) => c.style.width = wd[i] + 'px');
+    tb.style.width = ((TB[id].pr ? 44 : 0) + wd.reduce((a, b) => a + b, 0)) + 'px';
+  });
+}
+function cwReset() { Object.keys(CW).filter(k => k.startsWith(S.pg + '.')).forEach(k => delete CW[k]); cwSave(); refit(); }
+let rzT; window.addEventListener('resize', () => { clearTimeout(rzT); rzT = setTimeout(refit, 250); });
 let CW = {}; try { CW = JSON.parse(localStorage.getItem('cw') || '{}'); } catch (e) { }
 const cwSave = () => { try { localStorage.setItem('cw', JSON.stringify(CW)); } catch (e) { } };
 document.addEventListener('pointerdown', e => { // seret batas judul kolom untuk mengubah lebar
@@ -110,11 +132,10 @@ const dq = (() => { let t; return (id, v) => { clearTimeout(t); t = setTimeout((
 function tbl(id, cols, data, act, opt) {
   if (!$(id)) return; opt = opt || {};
   const pr = can('print') && !opt.nopr; TB[id] = { cols, data, act, pr };
-  const cw = c => c === '_a' ? 280 : (WT[c] || 120), sc = Math.max(1, (($(id).clientWidth || 1000) - 4 - (pr ? 44 : 0) - (act ? 280 : 0)) / cols.reduce((a, c) => a + cw(c[0]), 0));
-  const cl = cols.concat(act ? [['_a', 'Aksi']] : []), wd = cl.map(c => CW[S.pg + '.' + c[0]] || (c[0] === '_a' ? 280 : Math.round(cw(c[0]) * sc)));
+  const cl = cols.concat(act ? [['_a', 'Aksi']] : []), wd = fitW(id);
   const tw = (pr ? 44 : 0) + wd.reduce((a, b) => a + b, 0), cg = `<colgroup>${pr ? '<col style="width:44px">' : ''}${cl.map((c, i) => `<col data-k="${c[0]}" style="width:${wd[i]}px">`).join('')}</colgroup>`;
-  $(id).innerHTML = `<div class="d-flex gap-2 mb-2 flex-wrap"><input class="form-control" style="max-width:320px" placeholder="Cari di semua kolom…" aria-label="Cari" oninput="dq('${id}',this.value)">${ADM.includes(S.r) && !opt.nocsv ? `<button class="btn btn-outline-secondary" onclick="csv('${id}')"><i class="bi bi-download"></i> Ekspor CSV</button>` : ''}${pr ? `<button class="btn btn-outline-secondary" onclick="cetak('${id}')"><i class="bi bi-printer"></i> Cetak terpilih</button>` : ''}${opt.extra || ''}</div><div class="table-responsive tscroll"><table class="table table-hover tfix" style="width:${tw}px">${cg}<thead><tr>${pr ? `<th><input type="checkbox" aria-label="Pilih semua" onchange="document.querySelectorAll('#${id} .rc').forEach(c=>c.checked=this.checked)"></th>` : ''}${cl.map(c => `<th>${c[1]}<i class="rz" data-k="${c[0]}" role="separator" aria-label="Ubah lebar kolom ${c[1]}" title="Seret untuk mengubah lebar · klik dua kali untuk reset"></i></th>`).join('')}</tr></thead><tbody id="${id}b"></tbody></table></div>`;
-  drawTbl(id, '');
+  $(id).innerHTML = `<div class="d-flex gap-2 mb-2 flex-wrap"><input class="form-control" style="max-width:320px" placeholder="Cari di semua kolom…" aria-label="Cari" oninput="dq('${id}',this.value)"><button class="btn btn-outline-secondary" onclick="cwReset()" title="Lebar kolom otomatis mengisi layar"><i class="bi bi-arrows-angle-contract"></i> Sesuaikan lebar</button>${ADM.includes(S.r) && !opt.nocsv ? `<button class="btn btn-outline-secondary" onclick="csv('${id}')"><i class="bi bi-download"></i> Ekspor CSV</button>` : ''}${pr ? `<button class="btn btn-outline-secondary" onclick="cetak('${id}')"><i class="bi bi-printer"></i> Cetak terpilih</button>` : ''}${opt.extra || ''}</div><div class="table-responsive tscroll"><table class="table table-hover tfix" style="width:${tw}px">${cg}<thead><tr>${pr ? `<th><input type="checkbox" aria-label="Pilih semua" onchange="document.querySelectorAll('#${id} .rc').forEach(c=>c.checked=this.checked)"></th>` : ''}${cl.map(c => `<th style="overflow-wrap:anywhere">${c[1]}<i class="rz" data-k="${c[0]}" role="separator" aria-label="Ubah lebar kolom ${c[1]}" title="Seret untuk mengubah lebar · klik dua kali untuk reset"></i></th>`).join('')}</tr></thead><tbody id="${id}b"></tbody></table></div>`;
+  drawTbl(id, ''); refit(); // ukur ulang setelah tabel tampil (memperhitungkan scrollbar)
 }
 function drawTbl(id, q) {
   const t = TB[id], s = q.toLowerCase(); if (!t || !$(id + 'b')) return;
@@ -166,7 +187,11 @@ const PG = {
   regPermintaan() { formPg('Registrasi Permintaan Darah', 'permintaan', 'sendPermintaan', '<div class="col-md-6"><label class="form-label" for="f_file">Surat permintaan RS (opsional, PDF/JPG/PNG maks 5 MB)</label><input class="form-control" id="f_file" type="file" accept=".pdf,.jpg,.jpeg,.png"></div>'); },
   dashboard() {
     shell('Dashboard', 'dv');
-    L('dashboard', [S.t], d => { $('dv').innerHTML = `<div class="row g-3">${golCards(d)}</div><h2 class="h5 mt-4">Kegiatan Donor</h2><div class="row g-3 kg">${kgCards(d.kegiatan)}</div>`; });
+    L('dashboard', [S.t], d => {
+      const lm = S.m.includes('permintaan'); // tabel permintaan hanya untuk pengguna yang memang punya akses menu Permintaan Darah
+      $('dv').innerHTML = `<div class="row g-3">${golCards(d)}</div>${lm ? '<h2 class="h5 mt-4">Permintaan Darah</h2><div id="dvm"></div>' : ''}<h2 class="h5 mt-4">Kegiatan Donor</h2><div class="row g-3 kg">${kgCards(d.kegiatan)}</div>`;
+      if (lm) L('listPermintaan', [S.t], m => tbl('dvm', [['Pasien', 'Pasien'], ['Umur', 'Umur'], ['Golda', 'Golda'], ['Komponen', 'Komponen'], ['Jumlah', 'Kantong'], ['RS', 'Rumah Sakit'], ['TglButuh', 'Tgl Dibutuhkan']], m, null, { nopr: 1, nocsv: 1 }));
+    });
   },
   pendonor() {
     shell('Data Pendonor', 'tb');
