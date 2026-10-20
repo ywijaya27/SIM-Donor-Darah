@@ -1,4 +1,3 @@
-<script>
 /** SIM Donor Darah — Frontend (SPA). Token hanya di memori JS, URL tidak pernah berubah. */
 const S = { t: null, r: null, n: null, pg: 'info', nav: 0, h: [], m: [] }, $ = id => document.getElementById(id);
 const G = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'], ADM = ['Super Admin', 'Admin'];
@@ -17,26 +16,21 @@ const SP = {
     ['Keluarga', 'Nama keluarga pasien', 'text', 1], ['NoHP', 'No HP', 'tel', 1], ['TglButuh', 'Tanggal dibutuhkan', 'date', 1]],
   kegiatan: [['Judul', 'Judul', 'text', 1], ['Isi', 'Isi berita', 'ta', 1], ['Gambar', 'Link gambar (opsional)', 'url'], ['Video', 'Link video (opsional)', 'url']]
 };
-let CH = {}, TB = {}, KG = [], LOG = [], SD = [];
+let CH = {}, TB = {}, KG = [], LOG = [];
 const LBL = { pendonor: 'Pendonor', permintaan: 'Permintaan Darah', kegiatan: 'Kegiatan' };
 
 // ── Utilitas ──
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-// Gambar kegiatan: link Drive (view / open?id= / uc?id=) tidak bisa dipakai di <img>; ubah ke URL thumbnail yang bisa tampil saat dipublish
-const gUrl = u => { u = String(u || '').trim(); const m = u.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?(?:[^#]*&)?id=|thumbnail\?(?:[^#]*&)?id=)([\w-]{20,})/) || u.match(/lh3\.googleusercontent\.com\/d\/([\w-]{20,})/); return m ? 'https://drive.google.com/thumbnail?id=' + m[1] + '&sz=w1000' : u; };
-const imgKg = u => u ? `<img src="${esc(gUrl(u))}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '';
 function toast(m, t) { const e = $('toast'); e.className = 'toast align-items-center border-0 text-bg-' + (t || 'dark'); $('toastMsg').textContent = m; bootstrap.Toast.getOrCreateInstance(e, { delay: 4000 }).show(); }
 let LC = {};
 const svS = () => { try { sessionStorage.setItem('sim', JSON.stringify({ t: S.t, r: S.r, n: S.n, h: S.h, m: S.m })); } catch (e) { } };
 function call(fn, a, ok, fail) { // loading bar tipis + penanganan error; mutasi menghapus cache tampilan
   $('bar').hidden = false;
-  google.script.run
-    .withSuccessHandler(r => {
-      $('bar').hidden = true;
-      if (r.success) { if (!/^(list|dashboard|beranda)/.test(fn)) LC = {}; ok && ok(r.data, r.message); }
-      else { toast(r.message, 'danger'); fail && fail(); if (/^Sesi/.test(r.message)) { S.t = null; try { sessionStorage.removeItem('sim'); } catch (e) { } go('login'); } }
-    })
-    .withFailureHandler(e => { $('bar').hidden = true; toast(e.message, 'danger'); fail && fail(); })[fn](...a);
+  kirim(fn, a).then(r => {
+    $('bar').hidden = true;
+    if (r.success) { if (!/^(list|dashboard|beranda)/.test(fn)) LC = {}; ok && ok(r.data, r.message); }
+    else { toast(r.message, 'danger'); fail && fail(); if (/^Sesi/.test(r.message)) { S.t = null; try { sessionStorage.removeItem('sim'); } catch (e) { } go('login'); } }
+  }).catch(e => { $('bar').hidden = true; toast('Gagal menghubungi server: ' + e.message, 'danger'); fail && fail(); });
 }
 function L(fn, a, ok) { // stale-while-revalidate: tampilkan data terakhir seketika, perbarui di latar belakang
   const n = S.nav, k = fn + JSON.stringify(a.slice(1)), lama = LC[k];
@@ -69,7 +63,7 @@ function go(p) {
 }
 function toggleSide(v) { const o = v === undefined ? !$('side').classList.contains('open') : v; $('side').classList.toggle('open', o); $('ov').classList.toggle('open', o); }
 function doLogin(e) { e.preventDefault(); call('login', [$('u').value, $('p').value], d => { S.t = d.token; S.r = d.role; S.n = d.nama; S.h = d.hak || []; S.m = d.menu || []; svS(); toast('Selamat datang, ' + d.nama, 'success'); go(S.m.includes('dashboard') ? 'dashboard' : (S.m[0] || 'info')); }); }
-function logout() { const t = S.t; S.t = S.r = S.n = null; S.h = []; S.m = []; LC = {}; try { sessionStorage.removeItem('sim'); } catch (e) { } google.script.run.logout(t); go('info'); }
+function logout() { const t = S.t; S.t = S.r = S.n = null; S.h = []; S.m = []; LC = {}; try { sessionStorage.removeItem('sim'); } catch (e) { } kirim('logout', [t]).catch(() => { }); go('info'); }
 
 // ── Form generik ──
 const F = spec => spec.map(([k, l, t, r]) => `<div class="col-md-6"><label class="form-label" for="f_${k}">${l}${r ? ' *' : ''}</label>${Array.isArray(t)
@@ -92,38 +86,15 @@ function sendPermintaan(e) {
 }
 
 // ── Tabel generik: cari di semua kolom + ekspor CSV ──
-function cell(k, v, r) {
+function cell(k, v) {
   v = v == null ? '' : v;
-  if (k === 'Pendonor' && S.pg === 'permintaan' && r) return pdCell(r);
   if (k === 'Golda') return `<span class="gd">${esc(v)}</span>`;
   if (k === 'SuratUrl') return v ? `<a href="${esc(v)}" target="_blank" rel="noopener">Lihat</a>` : '-';
   if (k === 'Aksi') return `<span class="bd ${/gagal/i.test(v) ? 'no' : /hapus/i.test(v) ? 'wa' : 'ok'}">${esc(v)}</span>`;
   if (['Status', 'Kepesertaan'].includes(k) && BG[v]) return `<span class="bd ${BG[v]}">${esc(v)}</span>`;
   return esc(v);
 }
-const WT = { Nama: 150, Alamat: 200, Pasien: 150, Keluarga: 140, RS: 170, Pendonor: 170, Data: 260, Waktu: 130, Email: 160, Hak: 150, Menu: 180, _a: 190, Umur: 60, JK: 80, Golda: 70, Jumlah: 70, Kota: 110, Status: 110, Kepesertaan: 140, DonorTerakhir: 120, TglButuh: 120, Komponen: 100, Ruangan: 100, User: 110, Aksi: 160 };
-// Lebar kolom otomatis: mengisi lebar wadah (melebar/menyempit mengikuti layar); kolom yang sudah diatur pengguna dipertahankan
-function fitW(id) {
-  const t = TB[id], cl = t.cols.concat(t.act ? [['_a', 'Aksi']] : []), w = c => WT[c] || 100;
-  const mn = c => Math.max(56, Math.min(96, Math.max(...String(c[1]).split(/\s+/).map(s => s.length)) * 8 + 22)); // minimal kolom (judul panjang boleh terpotong baris)
-  const sc = $(id).querySelector('.tscroll'), lebar = (sc ? sc.clientWidth : ($(id).clientWidth || 1000) - 17) - 4 - (t.pr ? 44 : 0);
-  const hasil = cl.map(c => CW[S.pg + '.' + c[0]] || 0); let sisa = lebar - hasil.reduce((a, v) => a + v, 0), bebas = cl.map((c, i) => i).filter(i => !hasil[i]);
-  while (bebas.length) { // bagi sisa lebar sesuai bobot; kolom yang lebih sempit dari minimalnya dikunci di minimal, sisanya dibagi ulang
-    const tot = bebas.reduce((a, i) => a + w(cl[i][0]), 0), kecil = bebas.filter(i => sisa * w(cl[i][0]) / tot < mn(cl[i]));
-    if (!kecil.length) { bebas.forEach(i => hasil[i] = Math.floor(sisa * w(cl[i][0]) / tot)); break; }
-    kecil.forEach(i => { hasil[i] = mn(cl[i]); sisa -= hasil[i]; }); bebas = bebas.filter(i => !kecil.includes(i));
-  }
-  return hasil;
-}
-function refit() { // sesuaikan ulang semua tabel yang tampil (saat jendela diubah ukurannya / tombol Sesuaikan lebar)
-  Object.keys(TB).forEach(id => {
-    const el = $(id), tb = el && el.querySelector('table'); if (!tb) return;
-    const wd = fitW(id); tb.querySelectorAll('col[data-k]').forEach((c, i) => c.style.width = wd[i] + 'px');
-    tb.style.width = ((TB[id].pr ? 44 : 0) + wd.reduce((a, b) => a + b, 0)) + 'px';
-  });
-}
-function cwReset() { Object.keys(CW).filter(k => k.startsWith(S.pg + '.')).forEach(k => delete CW[k]); cwSave(); refit(); }
-let rzT; window.addEventListener('resize', () => { clearTimeout(rzT); rzT = setTimeout(refit, 250); });
+const WT = { Alamat: 220, Nama: 160, Pasien: 160, Keluarga: 160, RS: 170, Data: 280, Waktu: 150, Email: 170, Hak: 180, Menu: 220 };
 let CW = {}; try { CW = JSON.parse(localStorage.getItem('cw') || '{}'); } catch (e) { }
 const cwSave = () => { try { localStorage.setItem('cw', JSON.stringify(CW)); } catch (e) { } };
 document.addEventListener('pointerdown', e => { // seret batas judul kolom untuk mengubah lebar
@@ -139,15 +110,16 @@ const dq = (() => { let t; return (id, v) => { clearTimeout(t); t = setTimeout((
 function tbl(id, cols, data, act, opt) {
   if (!$(id)) return; opt = opt || {};
   const pr = can('print') && !opt.nopr; TB[id] = { cols, data, act, pr };
-  const cl = cols.concat(act ? [['_a', 'Aksi']] : []), wd = fitW(id);
+  const cw = c => c === '_a' ? 280 : (WT[c] || 120), sc = Math.max(1, (($(id).clientWidth || 1000) - 4 - (pr ? 44 : 0) - (act ? 280 : 0)) / cols.reduce((a, c) => a + cw(c[0]), 0));
+  const cl = cols.concat(act ? [['_a', 'Aksi']] : []), wd = cl.map(c => CW[S.pg + '.' + c[0]] || (c[0] === '_a' ? 280 : Math.round(cw(c[0]) * sc)));
   const tw = (pr ? 44 : 0) + wd.reduce((a, b) => a + b, 0), cg = `<colgroup>${pr ? '<col style="width:44px">' : ''}${cl.map((c, i) => `<col data-k="${c[0]}" style="width:${wd[i]}px">`).join('')}</colgroup>`;
-  $(id).innerHTML = `<div class="d-flex gap-2 mb-2 flex-wrap"><input class="form-control" style="max-width:320px" placeholder="Cari di semua kolom…" aria-label="Cari" oninput="dq('${id}',this.value)"><button class="btn btn-outline-secondary" onclick="cwReset()" title="Lebar kolom otomatis mengisi layar"><i class="bi bi-arrows-angle-contract"></i> Sesuaikan lebar</button>${ADM.includes(S.r) && !opt.nocsv ? `<button class="btn btn-outline-secondary" onclick="csv('${id}')"><i class="bi bi-download"></i> Ekspor CSV</button>` : ''}${pr ? `<button class="btn btn-outline-secondary" onclick="cetak('${id}')"><i class="bi bi-printer"></i> Cetak terpilih</button>` : ''}${opt.extra || ''}</div><div class="table-responsive tscroll"><table class="table table-hover tfix" style="width:${tw}px">${cg}<thead><tr>${pr ? `<th><input type="checkbox" aria-label="Pilih semua" onchange="document.querySelectorAll('#${id} .rc').forEach(c=>c.checked=this.checked)"></th>` : ''}${cl.map(c => `<th style="overflow-wrap:anywhere">${c[1]}<i class="rz" data-k="${c[0]}" role="separator" aria-label="Ubah lebar kolom ${c[1]}" title="Seret untuk mengubah lebar · klik dua kali untuk reset"></i></th>`).join('')}</tr></thead><tbody id="${id}b"></tbody></table></div>`;
-  drawTbl(id, ''); refit(); // ukur ulang setelah tabel tampil (memperhitungkan scrollbar)
+  $(id).innerHTML = `<div class="d-flex gap-2 mb-2 flex-wrap"><input class="form-control" style="max-width:320px" placeholder="Cari di semua kolom…" aria-label="Cari" oninput="dq('${id}',this.value)">${ADM.includes(S.r) && !opt.nocsv ? `<button class="btn btn-outline-secondary" onclick="csv('${id}')"><i class="bi bi-download"></i> Ekspor CSV</button>` : ''}${pr ? `<button class="btn btn-outline-secondary" onclick="cetak('${id}')"><i class="bi bi-printer"></i> Cetak terpilih</button>` : ''}${opt.extra || ''}</div><div class="table-responsive tscroll"><table class="table table-hover tfix" style="width:${tw}px">${cg}<thead><tr>${pr ? `<th><input type="checkbox" aria-label="Pilih semua" onchange="document.querySelectorAll('#${id} .rc').forEach(c=>c.checked=this.checked)"></th>` : ''}${cl.map(c => `<th>${c[1]}<i class="rz" data-k="${c[0]}" role="separator" aria-label="Ubah lebar kolom ${c[1]}" title="Seret untuk mengubah lebar · klik dua kali untuk reset"></i></th>`).join('')}</tr></thead><tbody id="${id}b"></tbody></table></div>`;
+  drawTbl(id, '');
 }
 function drawTbl(id, q) {
   const t = TB[id], s = q.toLowerCase(); if (!t || !$(id + 'b')) return;
   $(id + 'b').innerHTML = t.data.map((r, i) => [r, i]).filter(([r]) => t.cols.some(c => String(r[c[0]]).toLowerCase().includes(s)))
-    .map(([r, i]) => `<tr>${t.pr ? `<td><input type="checkbox" class="rc" data-i="${i}" aria-label="Pilih baris"></td>` : ''}${t.cols.map(c => `<td>${cell(c[0], r[c[0]], r)}</td>`).join('')}${t.act ? `<td>${t.act(r, i)}</td>` : ''}</tr>`).join('')
+    .map(([r, i]) => `<tr>${t.pr ? `<td><input type="checkbox" class="rc" data-i="${i}" aria-label="Pilih baris"></td>` : ''}${t.cols.map(c => `<td>${cell(c[0], r[c[0]])}</td>`).join('')}${t.act ? `<td>${t.act(r, i)}</td>` : ''}</tr>`).join('')
     || '<tr><td colspan="99" class="text-center text-muted py-4">Belum ada data.</td></tr>';
 }
 function cetak(id) { // print selection: hanya baris tercentang, lewat area cetak (tanpa membuka tab baru)
@@ -169,19 +141,6 @@ const del = (n, id, pg) => ask('Hapus data ini? Tindakan tidak bisa dibatalkan.'
 const kep = (id, v) => {
   const r = TB.tb && TB.tb.data.find(x => x.ID === id); if (r) { r.Kepesertaan = v; drawTbl('tb', ''); } // optimistis
   call('setKepesertaan', [S.t, id, v], (d, m) => toast(m, 'success'), () => go(S.pg));
-};
-// Kolom Pendonor (Permintaan Darah): daftar pilihan = pendonor Siap Donor dengan golda sama dengan pasien; hanya yang berhak 'ubah' (Super Admin/Admin) bisa memilih
-const pdCell = r => {
-  const v = r.Pendonor || '';
-  if (!canAdm('ubah')) return v ? esc(v) : '-';
-  const o = SD.filter(x => x.Golda === r.Golda), ada = !v || o.some(x => x.Nama === v);
-  return `<select class="form-select form-select-sm w-100" aria-label="Pilih pendonor golongan ${esc(r.Golda)}" onchange="setPd('${esc(r.ID)}',this.value)"><option value="">Pilih pendonor…</option>${ada ? '' : `<option value="__cur" selected>${esc(v)}</option>`}${o.length ? '' : '<option disabled>(tidak ada pendonor siap, golda sama)</option>'}${o.map(x => `<option value="${esc(x.ID)}" ${x.Nama === v ? 'selected' : ''}>${esc(x.Nama)}</option>`).join('')}</select>`;
-};
-const setPd = (id, pid) => {
-  if (pid === '__cur') return;
-  const r = TB.tb && TB.tb.data.find(x => x.ID === id), p = SD.find(x => x.ID === pid), lama = r ? r.Pendonor : '';
-  if (r) r.Pendonor = p ? p.Nama : ''; // optimistis
-  call('setPendonorPermintaan', [S.t, id, pid], (d, m) => toast(m, 'success'), () => { if (r) r.Pendonor = lama; drawTbl('tb', ''); });
 };
 const stat = (id, v) => call('setStatusPermintaan', [S.t, id, v], (d, m) => toast(m, 'success'));
 
@@ -207,11 +166,7 @@ const PG = {
   regPermintaan() { formPg('Registrasi Permintaan Darah', 'permintaan', 'sendPermintaan', '<div class="col-md-6"><label class="form-label" for="f_file">Surat permintaan RS (opsional, PDF/JPG/PNG maks 5 MB)</label><input class="form-control" id="f_file" type="file" accept=".pdf,.jpg,.jpeg,.png"></div>'); },
   dashboard() {
     shell('Dashboard', 'dv');
-    L('dashboard', [S.t], d => {
-      const lm = S.m.includes('permintaan'); // tabel permintaan hanya untuk pengguna yang memang punya akses menu Permintaan Darah
-      $('dv').innerHTML = `<div class="row g-3">${golCards(d)}</div>${lm ? '<h2 class="h5 mt-4">Permintaan Darah</h2><div id="dvm"></div>' : ''}<h2 class="h5 mt-4">Kegiatan Donor</h2><div class="row g-3 kg">${kgCards(d.kegiatan)}</div>`;
-      if (lm) L('listPermintaan', [S.t], m => tbl('dvm', [['Pasien', 'Pasien'], ['Umur', 'Umur'], ['Golda', 'Golda'], ['Komponen', 'Komponen'], ['Jumlah', 'Kantong'], ['RS', 'Rumah Sakit'], ['TglButuh', 'Tgl Dibutuhkan']], m, null, { nopr: 1, nocsv: 1 }));
-    });
+    L('dashboard', [S.t], d => { $('dv').innerHTML = `<div class="row g-3">${golCards(d)}</div><h2 class="h5 mt-4">Kegiatan Donor</h2><div class="row g-3 kg">${kgCards(d.kegiatan)}</div>`; });
   },
   pendonor() {
     shell('Data Pendonor', 'tb');
@@ -233,14 +188,13 @@ const PG = {
   },
   permintaan() {
     shell('Daftar Permintaan Darah', 'tb');
-    if (canAdm('ubah')) L('listSiapDonor', [S.t], s => { SD = s; if (S.pg === 'permintaan' && TB.tb && TB.tb.cols.some(c => c[0] === 'Pendonor')) drawTbl('tb', ''); });
-    L('listPermintaan', [S.t], d => tbl('tb', [['Pasien', 'Pasien'], ['Umur', 'Umur'], ['Golda', 'Golda'], ['Komponen', 'Komponen'], ['Jumlah', 'Kantong'], ['RS', 'Rumah Sakit'], ['Ruangan', 'Ruangan'], ['AsalPasien', 'Asal'], ['Kota', 'Kota'], ['Keluarga', 'Keluarga'], ['NoHP', 'No HP'], ['TglButuh', 'Dibutuhkan'], ['SuratUrl', 'Surat'], ['Status', 'Status'], ['Pendonor', 'Pendonor']], d, adaAksi() ? aksiM : null, { extra: tmbl('permintaan') }));
+    L('listPermintaan', [S.t], d => tbl('tb', [['Pasien', 'Pasien'], ['Umur', 'Umur'], ['Golda', 'Golda'], ['Komponen', 'Komponen'], ['Jumlah', 'Kantong'], ['RS', 'Rumah Sakit'], ['Ruangan', 'Ruangan'], ['AsalPasien', 'Asal'], ['Kota', 'Kota'], ['Keluarga', 'Keluarga'], ['NoHP', 'No HP'], ['TglButuh', 'Dibutuhkan'], ['SuratUrl', 'Surat'], ['Status', 'Status']], d, adaAksi() ? aksiM : null, { extra: tmbl('permintaan') }));
   },
   kegiatan() {
     $('app').innerHTML = `<div class="container py-4"><div class="d-flex justify-content-between align-items-center mb-3"><h2 class="h4 mb-0">Kegiatan Donor</h2>${tmbl('kegiatan')}</div><div id="ef"></div><div id="kg" class="row g-3 kg"><div class="text-center py-4"><div class="spinner-border text-danger"></div></div></div></div>`;
     L('listKegiatan', [S.t], d => {
       KG = d;
-      $('kg').innerHTML = d.map((k, i) => `<div class="col-md-4"><div class="cardx h-100">${imgKg(k.Gambar)}<div class="p-3"><small>${esc(k.Tanggal)} · ${esc(k.Oleh)}</small><h3 class="h6 mt-1">${esc(k.Judul)}</h3><p class="small">${esc(k.Isi)}</p>${k.Video ? `<a class="small d-block mb-2" href="${esc(k.Video)}" target="_blank" rel="noopener"><i class="bi bi-play-circle"></i> Video</a>` : ''}<div class="d-flex gap-1 flex-wrap">${canAdm('ubah') ? `<button class="btn btn-sm ${k.Publish === 'Ya' ? 'btn-success' : 'btn-outline-success'}" onclick="pub('${k.ID}',${k.Publish === 'Ya' ? 0 : 1})"><i class="bi bi-megaphone"></i> ${k.Publish === 'Ya' ? 'Terpublikasi · Batalkan' : 'Publish'}</button><button class="btn btn-sm btn-outline-primary" onclick="fEdit('kegiatan',KG[${i}])"><i class="bi bi-pencil"></i> Ubah</button>` : ''}${can('hapus') ? `<button class="btn btn-sm btn-outline-danger" aria-label="Hapus" onclick="del('Kegiatan','${k.ID}','kegiatan')"><i class="bi bi-trash"></i></button>` : ''}</div></div></div></div>`).join('') || '<p class="text-muted">Belum ada kegiatan.</p>';
+      $('kg').innerHTML = d.map((k, i) => `<div class="col-md-4"><div class="cardx h-100">${kgImg(k)}<div class="p-3"><small>${esc(k.Tanggal)} · ${esc(k.Oleh)}</small><h3 class="h6 mt-1">${esc(k.Judul)}</h3><p class="small">${esc(k.Isi)}</p>${k.Video ? `<a class="small d-block mb-2" href="${esc(k.Video)}" target="_blank" rel="noopener"><i class="bi bi-play-circle"></i> Video</a>` : ''}<div class="d-flex gap-1 flex-wrap">${canAdm('ubah') ? `<button class="btn btn-sm ${k.Publish === 'Ya' ? 'btn-success' : 'btn-outline-success'}" onclick="pub('${k.ID}',${k.Publish === 'Ya' ? 0 : 1})"><i class="bi bi-megaphone"></i> ${k.Publish === 'Ya' ? 'Terpublikasi · Batalkan' : 'Publish'}</button><button class="btn btn-sm btn-outline-primary" onclick="fEdit('kegiatan',KG[${i}])"><i class="bi bi-pencil"></i> Ubah</button>` : ''}${can('hapus') ? `<button class="btn btn-sm btn-outline-danger" aria-label="Hapus" onclick="del('Kegiatan','${k.ID}','kegiatan')"><i class="bi bi-trash"></i></button>` : ''}</div></div></div></div>`).join('') || '<p class="text-muted">Belum ada kegiatan.</p>';
     });
   },
   grafik() {
@@ -258,35 +212,14 @@ const PG = {
 // ── Form tambah / ubah (Pendonor, Permintaan, Kegiatan) ──
 function fEdit(kind, row) {
   row = row || {}; const sp = SP[kind];
-  $('ef').innerHTML = `<div class="cardx p-3 mb-3"><h3 class="h6">${row.ID ? 'Ubah' : 'Tambah'} ${LBL[kind]}</h3><form class="row g-2" onsubmit="simpanEdit(event,'${kind}')"><input type="hidden" id="f_ID" value="${esc(row.ID || '')}">${F(sp)}${kind === 'permintaan' && row.ID ? `<div class="col-md-6"><label class="form-label" for="f_Pendonor">Pendonor</label><select class="form-select" id="f_Pendonor" data-nama="${esc(row.Pendonor || '')}" data-golda="${esc(row.Golda || '')}"></select><small>Hanya pendonor Siap Donor dengan golongan darah sama dengan pasien.</small></div>` : ''}${kind === 'kegiatan' ? '<div class="col-md-6"><label class="form-label" for="f_file">Upload gambar (opsional, JPG/PNG/WebP)</label><input class="form-control" id="f_file" type="file" accept="image/jpeg,image/png,image/webp"><small>Jika dipilih, menggantikan link gambar.</small></div>' : ''}<div class="col-12"><button class="btn btn-danger">Simpan</button> <button type="button" class="btn btn-outline-secondary" onclick="$('ef').innerHTML=''">Batal</button></div></form></div>`;
+  $('ef').innerHTML = `<div class="cardx p-3 mb-3"><h3 class="h6">${row.ID ? 'Ubah' : 'Tambah'} ${LBL[kind]}</h3><form class="row g-2" onsubmit="simpanEdit(event,'${kind}')"><input type="hidden" id="f_ID" value="${esc(row.ID || '')}">${F(sp)}${kind === 'kegiatan' ? HINT_IMG : ''}<div class="col-12"><button class="btn btn-danger">Simpan</button> <button type="button" class="btn btn-outline-secondary" onclick="$('ef').innerHTML=''">Batal</button></div></form></div>`;
   sp.forEach(([c]) => { const e = $('f_' + c); if (e && row[c] != null) e.value = String(row[c]); });
-  if (kind === 'permintaan' && row.ID) { $('f_Golda').addEventListener('change', () => pdOpts()); pdOpts(true); }
+  if (kind === 'kegiatan') { $('f_Gambar').addEventListener('input', prevImg); prevImg(); }
   window.scrollTo(0, 0);
-}
-function pdOpts(awal) { // isi pilihan Pendonor di form ubah permintaan: mengikuti golda pada form
-  const e = $('f_Pendonor'); if (!e) return;
-  const g = $('f_Golda').value, nm = e.dataset.nama || '', asal = e.dataset.golda === g, o = SD.filter(x => x.Golda === g);
-  let v = awal ? (asal && nm ? ((o.find(x => x.Nama === nm) || {}).ID || '__cur') : '') : e.value;
-  if (v === '__cur' && !(asal && nm)) v = ''; if (v && v !== '__cur' && !o.some(x => x.ID === v)) v = '';
-  e.innerHTML = '<option value="">Pilih pendonor…</option>' + (asal && nm && !o.some(x => x.Nama === nm) ? `<option value="__cur">${esc(nm)} (saat ini)</option>` : '') + o.map(x => `<option value="${esc(x.ID)}">${esc(x.Nama)}</option>`).join('') + (o.length ? '' : '<option disabled>(tidak ada pendonor siap, golda sama)</option>');
-  e.value = v;
-}
-function kecilkan(f, cb) { // perkecil gambar (maks 1280 px, JPEG) agar ringan dikirim & ditampilkan
-  const u = URL.createObjectURL(f), im = new Image();
-  im.onload = () => { const s = Math.min(1, 1280 / Math.max(im.width, im.height)), c = document.createElement('canvas'); c.width = Math.round(im.width * s); c.height = Math.round(im.height * s);
-    const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(im, 0, 0, c.width, c.height); URL.revokeObjectURL(u); cb(c.toDataURL('image/jpeg', 0.85).split(',')[1]); };
-  im.onerror = () => { URL.revokeObjectURL(u); toast('Gambar tidak dapat dibaca.', 'warning'); };
-  im.src = u;
 }
 function simpanEdit(e, kind) {
   e.preventDefault(); const o = V(SP[kind]); o.ID = $('f_ID').value;
-  if (kind === 'permintaan' && $('f_Pendonor')) o.Pendonor = $('f_Pendonor').value;
-  const kirim = () => call({ pendonor: 'simpanPendonor', permintaan: 'simpanPermintaan', kegiatan: 'simpanKegiatan' }[kind], [S.t, o], (d, m) => { toast(m, 'success'); go(S.pg); });
-  const f = kind === 'kegiatan' && $('f_file') ? $('f_file').files[0] : null;
-  if (!f) return kirim();
-  if (!/^image\/(jpeg|png|webp)$/.test(f.type)) return toast('Gambar harus JPG, PNG, atau WebP.', 'warning');
-  if (f.size > 10 * 1048576) return toast('Gambar maksimal 10 MB.', 'warning');
-  kecilkan(f, b64 => { o.File = { b64: b64, name: f.name.replace(/\.[^.]+$/, '') + '.jpg', type: 'image/jpeg' }; kirim(); });
+  call({ pendonor: 'simpanPendonor', permintaan: 'simpanPermintaan', kegiatan: 'simpanKegiatan' }[kind], [S.t, o], (d, m) => { toast(m, 'success'); go(S.pg); });
 }
 const tmbl = k => canAdm('tambah') ? `<button class="btn btn-danger" onclick="fEdit('${k}')"><i class="bi bi-plus-lg"></i> Tambah</button>` : '';
 const aksiP = (r, i) => (canAdm('ubah') ? (r.Kepesertaan === 'Menunggu Persetujuan'
@@ -311,7 +244,26 @@ function sim() { // simulator kesiapan real-time pada form pendonor
 }
 
 // ── Kegiatan terpublikasi (Home & Dashboard) ──
-const kgCards = l => l.map(k => `<div class="col-md-4"><div class="cardx h-100">${imgKg(k.Gambar)}<div class="p-3"><small>${esc(k.Tanggal)}</small><h3 class="h6 mt-1">${esc(k.Judul)}</h3><p class="small">${esc(k.Isi)}</p>${k.Video ? `<a class="small" href="${esc(k.Video)}" target="_blank" rel="noopener"><i class="bi bi-play-circle"></i> Video</a>` : ''}</div></div></div>`).join('') || '<p class="text-muted">Belum ada kegiatan yang dipublikasikan.</p>';
+// Link gambar: ubah tautan "bagikan" Google Drive / Dropbox / Imgur menjadi alamat gambar langsung agar bisa tampil di <img>
+const imgUrl = u => {
+  u = String(u || '').trim(); let m;
+  m = u.match(/drive\.google\.com\/file\/d\/([\w-]{10,})/) || u.match(/(?:drive|docs)\.google\.com\/(?:open|uc|thumbnail)\?[^#]*\bid=([\w-]{10,})/) || u.match(/lh3\.googleusercontent\.com\/d\/([\w-]{10,})/);
+  if (m) return 'https://drive.google.com/thumbnail?id=' + m[1] + '&sz=w1200';
+  if (/^https?:\/\/(www\.)?dropbox\.com\//i.test(u)) { try { const x = new URL(u); x.searchParams.delete('dl'); x.searchParams.set('raw', '1'); return x.toString(); } catch (e) { } }
+  m = u.match(/^https?:\/\/(?:www\.)?imgur\.com\/(\w+)$/i); if (m) return 'https://i.imgur.com/' + m[1] + '.jpg';
+  return u.replace(/^http:\/\//i, 'https://');
+};
+const kgImg = k => {
+  if (!k.Gambar) return ''; const u = imgUrl(k.Gambar), m = u.match(/thumbnail\?id=([\w-]+)/);
+  return `<img src="${esc(u)}" ${m ? `data-alt="https://lh3.googleusercontent.com/d/${m[1]}"` : ''} alt="${esc(k.Judul)}" loading="lazy" referrerpolicy="no-referrer" onerror="imgErr(this)">`;
+};
+function imgErr(i) { // coba alamat cadangan sekali, lalu tampilkan penanda jelas (bukan gambar rusak)
+  if (i.dataset.alt && !i.dataset.t) { i.dataset.t = 1; i.src = i.dataset.alt; return; }
+  i.outerHTML = '<div class="kgph"><i class="bi bi-image fs-4"></i><span>Gambar tidak dapat dimuat.<br>Pastikan link dapat dibuka publik.</span></div>';
+}
+const HINT_IMG = '<div class="col-12"><div id="gpv" class="kg mb-2" style="max-width:320px"></div><small>Gambar: JPG/PNG/WebP, landscape 16:9 (mis. 1200×675 px), maks 1 MB. Link Google Drive harus diatur &quot;Siapa saja yang memiliki link&quot;. Link album atau folder tidak didukung.</small></div>';
+const prevImg = () => { const u = ($('f_Gambar') || {}).value, el = $('gpv'); if (el) el.innerHTML = u ? kgImg({ Gambar: u, Judul: 'Pratinjau' }) : ''; };
+const kgCards = l => l.map(k => `<div class="col-md-4"><div class="cardx h-100">${kgImg(k)}<div class="p-3"><small>${esc(k.Tanggal)}</small><h3 class="h6 mt-1">${esc(k.Judul)}</h3><p class="small">${esc(k.Isi)}</p>${k.Video ? `<a class="small" href="${esc(k.Video)}" target="_blank" rel="noopener"><i class="bi bi-play-circle"></i> Video</a>` : ''}</div></div></div>`).join('') || '<p class="text-muted">Belum ada kegiatan yang dipublikasikan.</p>';
 const pub = (id, v) => call('publishKegiatan', [S.t, id, !!v], (d, m) => { toast(m, 'success'); go('kegiatan'); });
 
 function lgFilter() {
@@ -364,4 +316,3 @@ document.addEventListener('DOMContentLoaded', () => {
   try { const x = JSON.parse(sessionStorage.getItem('sim') || 'null'); if (x && x.t) Object.assign(S, x); } catch (e) { }
   go(S.t ? (S.m.includes('dashboard') ? 'dashboard' : (S.m[0] || 'info')) : 'info');
 });
-</script>
