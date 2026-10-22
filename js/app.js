@@ -394,4 +394,8 @@ document.addEventListener('DOMContentLoaded', () => {
   try { const x = JSON.parse(sessionStorage.getItem('sim') || 'null'); if (x && x.t) Object.assign(S, x); } catch (e) { }
   go(S.t ? (S.m.includes('dashboard') ? 'dashboard' : (S.m[0] || 'info')) : 'info');
 });
+<<<<<<< HEAD
 </script>
+=======
+</script>
+>>>>>>> f95893296a6696de88acc1e49e9ec652671e9d5d
