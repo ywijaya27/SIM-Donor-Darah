@@ -6,24 +6,38 @@ async function kirim(fn, a) {
   }
 
   const publik = fn === 'beranda' || fn === 'kegiatanPublik'; // Data publik via GET
-  
+  const url = publik 
+    ? (GAS_URL + (GAS_URL.includes('?') ? '&' : '?') + 'action=' + encodeURIComponent(fn)) 
+    : GAS_URL;
+
   try {
     const r = publik
-      ? await fetch(GAS_URL + '?action=' + fn, { 
+      ? await fetch(url, { 
           method: 'GET',
           redirect: 'follow' 
         })
-      : await fetch(GAS_URL, { 
+      : await fetch(url, { 
           method: 'POST', 
           headers: { 'Content-Type': 'text/plain;charset=utf-8' }, 
           body: JSON.stringify({ action: fn, data: a }),
           redirect: 'follow'
         });
 
-    if (!r.ok) throw new Error('Server merespons status ' + r.status);
-    return await r.json();
+    if (!r.ok) throw new Error('Server merespons status HTTP ' + r.status);
+    
+    const text = await r.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (parseErr) {
+      if (text.includes('<!doctype') || text.includes('<html') || text.includes('userCodeAppPanel')) {
+        throw new Error('Backend Apps Script masih mengembalikan halaman HTML. Pastikan Kode.gs sudah versi REST API (ContentService) dan di-deploy ulang sebagai New version dengan akses "Anyone".');
+      }
+      throw new Error('Respons backend bukan format JSON yang valid: ' + text.slice(0, 120));
+    }
+    return data;
   } catch (err) {
-    console.error('API Error:', err);
-    throw new Error('Koneksi ke server terblokir atau URL GAS tidak valid.');
+    console.error('API Error (' + fn + '):', err);
+    throw err;
   }
 }
