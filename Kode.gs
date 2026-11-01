@@ -24,8 +24,7 @@ const AKUN_AWAL = [['superadmin', 'superadmin123', 'Super Admin', 'Super Admin']
 const hash = (user, pw) => HV + Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, APP_SALT + '|' + String(user).trim().toLowerCase() + '|' + String(pw))
   .map(b => ('0' + (b & 255).toString(16)).slice(-2)).join('');
 
-// ── REST API: frontend (GitHub Pages) memanggil lewat fetch(); GAS hanya mengembalikan JSON ──
-// Endpoint ini menggantikan doGet/HtmlService lama agar kompatibel dengan GitHub Pages tanpa iframe
+// ── REST API: frontend (GitHub Pages) memanggil lewat fetch(); GAS mengembalikan JSON ──
 const API = {
   login, logout, daftarPendonor, daftarPermintaan, beranda, kegiatanPublik, dashboard,
   listPendonor, listPermintaan, listSiapDonor, listKegiatan, listLog, listPengguna,
@@ -41,10 +40,26 @@ function buildResponse(d) {
 
 function doGet(e) {
   try {
-    const a = (e && e.parameter && e.parameter.action) || 'ping';
+    const a = (e && e.parameter && e.parameter.action) || '';
+    
+    // Permintaan data API via GET (dari GitHub Pages / Ping)
     if (a === 'ping') return buildResponse(res(true, { app: APP_NAME, versi: APP_VERSION, status: 'online' }));
-    if (!GET_PUBLIK.includes(a)) return buildResponse(res(false, null, 'Action GET "' + a + '" tidak dikenal atau memerlukan POST.'));
-    return buildResponse(API[a]());
+    if (a && GET_PUBLIK.includes(a)) return buildResponse(API[a]());
+    if (a && !GET_PUBLIK.includes(a)) return buildResponse(res(false, null, 'Action GET "' + a + '" tidak dikenal atau memerlukan POST.'));
+    
+    // Jika URL Web App dibuka langsung di browser (tanpa parameter action) -> Otomatis alihkan ke GitHub Pages
+    return HtmlService.createHtmlOutput(
+      '<!DOCTYPE html><html><head>' +
+      '<meta charset="UTF-8">' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+      '<meta http-equiv="refresh" content="0;url=https://ywijaya27.github.io/SIM-Donor-Darah/">' +
+      '<script>window.location.replace("https://ywijaya27.github.io/SIM-Donor-Darah/");</script>' +
+      '<style>body{font-family:system-ui,-apple-system,sans-serif;text-align:center;padding:50px 20px;background:#f8f9fa;color:#333}a{color:#d90429;font-weight:600;text-decoration:none}</style>' +
+      '</head><body>' +
+      '<h3>Membuka SIM Donor Darah...</h3>' +
+      '<p>Jika halaman tidak beralih otomatis, <a href="https://ywijaya27.github.io/SIM-Donor-Darah/">klik di sini untuk membuka aplikasi</a>.</p>' +
+      '</body></html>'
+    ).setTitle(APP_NAME).setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
   } catch (err) {
     return buildResponse(res(false, null, err.message));
   }
@@ -82,12 +97,12 @@ const CACHED = ['Pendonor', 'Permintaan', 'Kegiatan'];
 function bust(n) { if (CACHED.includes(n)) CacheService.getScriptCache().remove('rows_' + n); }
 function rows(n) {
   const c = CacheService.getScriptCache(), key = 'rows_' + n;
-  if (CACHED.includes(n)) { const hit = c.get(key); if (hit) return JSON.parse(hit); } // cache hit ~ms
+  if (CACHED.includes(n)) { const hit = c.get(key); if (hit) return JSON.parse(hit); }
   const sh = ss().getSheetByName(n);
   if (!sh) throw new Error('Sheet "' + n + '" tidak ditemukan. Jalankan setupAppEnvironment().');
   const d = sh.getDataRange().getValues(), h = d[0];
   const out = d.slice(1).map(r => { const o = {}; h.forEach((k, i) => o[k] = fmt(r[i])); return o; });
-  if (CACHED.includes(n)) { try { c.put(key, JSON.stringify(out), 300); } catch (e) { } } // TTL 5 menit
+  if (CACHED.includes(n)) { try { c.put(key, JSON.stringify(out), 300); } catch (e) { } }
   return out;
 }
 function add(n, o) {
@@ -103,9 +118,9 @@ function upd(n, id, f, v) {
   if (i < 0) throw new Error('Data tidak ditemukan.');
   sh.getRange(i + 1, H[n].indexOf(f) + 1).setValue(v); bust(n);
 }
-const aman = v => /^[=+\-@]/.test(String(v)) ? "'" + v : v; // cegah injeksi rumus di sel sheet
+const aman = v => /^[=+\-@]/.test(String(v)) ? "'" + v : v;
 function log(u, a, d) { ss().getSheetByName('Log').appendRow([new Date(), aman(u.u), aman(a), aman(d || '')]); }
-function logGagal(nm, ket) { // gagal login dicatat maks. 5x / 10 menit per username agar log tidak dibanjiri
+function logGagal(nm, ket) {
   try {
     const c = CacheService.getScriptCache(), key = 'lf_' + nm.slice(0, 30), n = +(c.get(key) || 0);
     if (n < 5) { log({ u: nm.slice(0, 30) || '(kosong)' }, 'Login gagal', ket); c.put(key, String(n + 1), 600); }
@@ -113,15 +128,15 @@ function logGagal(nm, ket) { // gagal login dicatat maks. 5x / 10 menit per user
 }
 function need(d, keys) { keys.forEach(k => { if (!String(d[k] || '').trim()) throw new Error('Kolom ' + k + ' wajib diisi.'); }); }
 
-// ── Autentikasi (token disimpan di cache server, bukan di URL) ──
-function pastikanHeader(n) { // tambahkan kolom baru (hak/menu/publish) ke sheet lama bila belum ada
+// ── Autentikasi ──
+function pastikanHeader(n) {
   const c = CacheService.getScriptCache(), key = 'hdr_' + n + APP_VERSION; if (c.get(key)) return;
   const sh = ss().getSheetByName(n);
   if (sh.getMaxColumns() < H[n].length) sh.insertColumnsAfter(sh.getMaxColumns(), H[n].length - sh.getMaxColumns());
   H[n].forEach((k, i) => { if (sh.getRange(1, i + 1).getValue() !== k) sh.getRange(1, i + 1).setValue(k); });
   bust(n); c.put(key, '1', 21600);
 }
-function ensureAkun() { // pastikan sheet Pengguna terisi akun awal
+function ensureAkun() {
   const sh = ss().getSheetByName('Pengguna');
   if (!sh) throw new Error('Sheet Pengguna tidak ditemukan. Jalankan setupAppEnvironment() dari editor Apps Script.');
   pastikanHeader('Pengguna');
@@ -137,7 +152,6 @@ function login(u, p) {
     const nm = String(u).trim().toLowerCase(), h = hash(nm, p), l = rows('Pengguna');
     const x = l.find(r => String(r.Username).trim().toLowerCase() === nm);
     const awal = AKUN_AWAL.find(a => a[0] === nm);
-    // Hash lama/rusak (bukan format v2) + password awal benar -> perbaiki otomatis
     if (x && awal && awal[1] === String(p) && !String(x.Hash).startsWith(HV)) { upd('Pengguna', x.Username, 'Hash', h); x.Hash = h; }
     if (!x || String(x.Hash).trim() !== h) {
       logGagal(nm, x ? 'password salah' : 'username tidak dikenal');
@@ -165,7 +179,7 @@ function logout(t) {
   if (s) { try { log(JSON.parse(s), 'Logout', ''); } catch (e) { } }
   c.remove(t); return res(true);
 }
-function gantiPassword(t, username, pw) { // hanya Super Admin
+function gantiPassword(t, username, pw) {
   return run(() => {
     const u = auth(t, ['Super Admin']);
     if (String(pw).length < 6) throw new Error('Password minimal 6 karakter.');
@@ -174,7 +188,7 @@ function gantiPassword(t, username, pw) { // hanya Super Admin
   });
 }
 
-// ── Status kesiapan: pria 3 bulan, wanita 4 bulan; menunggu ≤ 14 hari ──
+// ── Status kesiapan ──
 function status(p) {
   if (!p.DonorTerakhir) return 'Siap Donor';
   const d = new Date(p.DonorTerakhir); d.setMonth(d.getMonth() + (p.JK === 'Perempuan' ? 4 : 3));
@@ -182,7 +196,7 @@ function status(p) {
   return sisa <= 0 ? 'Siap Donor' : sisa <= 14 ? 'Menunggu' : 'Belum Siap';
 }
 
-// ── Registrasi publik (tanpa login) ──
+// ── Registrasi publik ──
 function daftarPendonor(d) {
   return run(() => {
     need(d, ['Nama', 'Umur', 'JK', 'Golda', 'NoHP', 'Alamat', 'Kota']);
@@ -242,7 +256,7 @@ function dashboard(t) {
     return res(true, Object.assign(statGolda(), { kegiatan: pubKeg() }));
   });
 }
-function beranda() { // publik: hanya angka agregat (tanpa data pribadi) + kegiatan terpublikasi, 1 panggilan
+function beranda() {
   return run(() => { pastikanHeader('Kegiatan'); const s = statGolda(); return res(true, { siap: s.siap, req: s.req, kegiatan: pubKeg() }); });
 }
 function listPendonor(t, mode) {
@@ -250,17 +264,17 @@ function listPendonor(t, mode) {
     lihat(t, mode === 'siap' ? 'siap' : 'pendonor');
     let l = rows('Pendonor').map(p => Object.assign({}, p, { Status: status(p) }));
     if (mode === 'siap') l = l.filter(p => p.Kepesertaan === 'Aktif' && p.Status === 'Siap Donor');
-    return res(true, l); // semua kolom ditampilkan
+    return res(true, l);
   });
 }
-function listPermintaan(t, mode) { // default: permintaan yang belum Terpenuhi; mode 'arsip': hanya yang Terpenuhi
+function listPermintaan(t, mode) {
   return run(() => { lihat(t, mode === 'arsip' ? 'arsip' : 'permintaan'); pastikanHeader('Permintaan'); return res(true, rows('Permintaan').filter(r => (r.Status === 'Terpenuhi') === (mode === 'arsip'))); });
 }
-function listSiapDonor(t) { // daftar pilihan kolom Pendonor di Permintaan Darah: hanya pendonor Aktif & Siap Donor (data minimal)
+function listSiapDonor(t) {
   return run(() => { izinAdm(t, 'ubah'); return res(true, rows('Pendonor').filter(p => p.Kepesertaan === 'Aktif' && status(p) === 'Siap Donor').map(p => ({ ID: p.ID, Nama: p.Nama, Golda: p.Golda }))); });
 }
 function listKegiatan(t) { return run(() => { lihat(t, 'kegiatan'); pastikanHeader('Kegiatan'); return res(true, rows('Kegiatan').reverse()); }); }
-function kegiatanPublik() { // publik: hanya kegiatan yang sudah di-publish (untuk Home & Dashboard)
+function kegiatanPublik() {
   return run(() => { pastikanHeader('Kegiatan');
     return res(true, rows('Kegiatan').filter(k => k.Publish === 'Ya').reverse().slice(0, 6).map(k => ({ Judul: k.Judul, Isi: k.Isi, Gambar: k.Gambar, Video: k.Video, Tanggal: k.Tanggal }))); });
 }
@@ -271,7 +285,6 @@ function publishKegiatan(t, id, v) {
   });
 }
 
-// ── Activity Log (Audit Log): khusus Super Admin, hanya-baca ──
 function listLog(t, maks) {
   return run(() => {
     auth(t, ['Super Admin']);
@@ -283,7 +296,6 @@ function listLog(t, maks) {
   });
 }
 
-// ── Aksi admin ──
 function setKepesertaan(t, id, v) {
   return run(() => {
     const u = izinAdm(t, 'ubah');
@@ -291,7 +303,7 @@ function setKepesertaan(t, id, v) {
     const p = rows('Pendonor').find(r => r.ID === id);
     if (!p) throw new Error('Data tidak ditemukan.');
     const baru = p.Kepesertaan === 'Menunggu Persetujuan' && v === 'Aktif';
-    updRow('Pendonor', id, baru ? { Kepesertaan: v, DisetujuiOleh: u.u } : { Kepesertaan: v }); // 1x baca + 1x tulis
+    updRow('Pendonor', id, baru ? { Kepesertaan: v, DisetujuiOleh: u.u } : { Kepesertaan: v });
     if (baru) {
       try { if (p.Email) MailApp.sendEmail(p.Email, 'Pendaftaran Donor Darah Disetujui', 'Halo ' + p.Nama + ', pendaftaran Anda sebagai pendonor di ' + APP_NAME + ' telah disetujui. Terima kasih!'); } catch (e) { }
     }
@@ -299,7 +311,7 @@ function setKepesertaan(t, id, v) {
     return res(true, null, 'Kepesertaan diperbarui.');
   });
 }
-function setPendonorPermintaan(t, id, pid, manual) { // pilih pendonor untuk permintaan; golda pendonor harus sama dengan golda pasien
+function setPendonorPermintaan(t, id, pid, manual) {
   return run(() => {
     const u = izinAdm(t, 'ubah'); pastikanHeader('Permintaan');
     const q = rows('Permintaan').find(r => r.ID === id); if (!q) throw new Error('Data tidak ditemukan.');
@@ -308,7 +320,7 @@ function setPendonorPermintaan(t, id, pid, manual) { // pilih pendonor untuk per
       const p = rows('Pendonor').find(r => r.ID === pid);
       if (!p || p.Kepesertaan !== 'Aktif' || status(p) !== 'Siap Donor' || p.Golda !== q.Golda) throw new Error('Pendonor harus berstatus Siap Donor dengan golongan darah sama dengan pasien.');
       nama = p.Nama;
-    } else { const m = String(manual || '').trim().replace(/[\r\n\t]+/g, ' '); if (m.length > 100) throw new Error('Nama pendonor maksimal 100 karakter.'); nama = m; } // input manual (bebas)
+    } else { const m = String(manual || '').trim().replace(/[\r\n\t]+/g, ' '); if (m.length > 100) throw new Error('Nama pendonor maksimal 100 karakter.'); nama = m; }
     upd('Permintaan', id, 'Pendonor', aman(nama)); log(u, 'Pendonor permintaan', q.Pasien + ' : ' + (nama || '(dikosongkan)'));
     return res(true, null, nama ? 'Pendonor dipilih.' : 'Pendonor dikosongkan.');
   });
@@ -322,20 +334,19 @@ function setStatusPermintaan(t, id, v) {
   });
 }
 
-// ── Tambah / Ubah oleh staf: hanya Super Admin & Admin, sesuai hak 'tambah' / 'ubah' ──
-function updRow(n, id, o) { // ubah beberapa kolom pada satu baris (1x baca, 1x tulis)
+function updRow(n, id, o) {
   const sh = ss().getSheetByName(n), v = sh.getDataRange().getValues(), i = v.findIndex((r, j) => j && r[0] === id);
   if (i < 0) throw new Error('Data tidak ditemukan.');
   const lock = LockService.getScriptLock(); lock.waitLock(10000);
   try { sh.getRange(i + 1, 1, 1, H[n].length).setValues([H[n].map((c, x) => o[c] !== undefined ? o[c] : v[i][x])]); bust(n); } finally { lock.releaseLock(); }
 }
-function folderMedia() { // folder Drive Media_Kegiatan (dibuat otomatis bila belum ada)
+function folderMedia() {
   const id = P.getProperty('mediaId'); if (id) { try { return DriveApp.getFolderById(id); } catch (e) { } }
   const f = DriveApp.getFoldersByName(FOLDER_NAME), root = f.hasNext() ? f.next() : DriveApp.createFolder(FOLDER_NAME);
   const x = root.getFoldersByName('Media_Kegiatan'), m = x.hasNext() ? x.next() : root.createFolder('Media_Kegiatan');
   P.setProperty('mediaId', m.getId()); return m;
 }
-function simpanGambar(f) { // simpan gambar kegiatan ke Drive (akses "siapa saja dengan link"), kembalikan URL yang bisa tampil di <img>
+function simpanGambar(f) {
   if (!f || !f.b64) return '';
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(f.type) || f.b64.length > 7e6) throw new Error('Gambar harus JPG/PNG/WebP maks 5 MB.');
   const fl = folderMedia().createFile(Utilities.newBlob(Utilities.base64Decode(f.b64), f.type, f.name));
@@ -370,10 +381,10 @@ function simpanPermintaan(t, d) {
     const u = izinAdm(t, d.ID ? 'ubah' : 'tambah'), f = ['Pasien', 'Umur', 'Golda', 'Komponen', 'Jumlah', 'RS', 'Ruangan', 'AsalPasien', 'Kota', 'Keluarga', 'NoHP', 'TglButuh'];
     need(d, f); if (!GOLDA.includes(d.Golda)) throw new Error('Golongan darah tidak valid.'); pastikanHeader('Permintaan');
     const o = {}; f.forEach(c => o[c] = c === 'NoHP' ? "'" + d.NoHP : d[c]);
-    if (d.ID) { // form ubah: kolom Pendonor (ID pendonor / '' = kosong / '__cur' = tetap); golda berubah -> pilihan lama dikosongkan
+    if (d.ID) {
       const q = rows('Permintaan').find(r => r.ID === d.ID), gb = q && q.Golda !== d.Golda;
       const man = String(d.PendonorManual || '').trim().replace(/[\r\n\t]+/g, ' ');
-      if (man) { if (man.length > 100) throw new Error('Nama pendonor maksimal 100 karakter.'); o.Pendonor = aman(man); } // input manual (bebas)
+      if (man) { if (man.length > 100) throw new Error('Nama pendonor maksimal 100 karakter.'); o.Pendonor = aman(man); }
       else if (d.Pendonor === undefined || d.Pendonor === '__cur') { if (gb) o.Pendonor = ''; }
       else if (d.Pendonor === '') o.Pendonor = '';
       else {
@@ -398,7 +409,6 @@ function hapus(t, n, id) {
   });
 }
 
-// ── Pengaturan pengguna & hak akses (khusus Super Admin) ──
 function listPengguna(t) {
   return run(() => { auth(t, ['Super Admin']); ensureAkun();
     return res(true, rows('Pengguna').map(x => ({ Username: x.Username, Nama: x.Nama, Peran: x.Peran, Hak: hakDari(x).join(', ') || '-', HakList: hakDari(x), Menu: ADM.includes(x.Peran) ? 'Semua' : (menuDari(x).join(', ') || '-'), MenuList: menuDari(x) }))); });
@@ -437,7 +447,6 @@ function hapusPengguna(t, un) {
   });
 }
 
-// ── Import pendonor dari template Excel/CSV (hak: upload) ──
 function importPendonor(t, list) {
   return run(() => {
     const u = izin(t, 'upload');
@@ -464,12 +473,10 @@ function importPendonor(t, list) {
   });
 }
 
-// ── Auto-setup: jalankan SEKALI dari editor Apps Script (error tidak disembunyikan) ──
 function setupAppEnvironment() {
   const step = (nama, fn) => { try { return fn(); } catch (e) { throw new Error('Setup gagal di langkah "' + nama + '": ' + e.message); } };
   const baris = (n, o) => H[n].map(k => k === 'ID' ? Utilities.getUuid() : (o[k] === undefined ? '' : o[k]));
 
-  // 1. Spreadsheet dibuat/ditemukan lebih dulu
   const s = step('spreadsheet', () => {
     const id = P.getProperty('ssId');
     if (id) { try { return SpreadsheetApp.openById(id); } catch (e) { } }
@@ -478,7 +485,6 @@ function setupAppEnvironment() {
   });
   P.setProperty('ssId', s.getId());
 
-  // 2. Folder Drive + sub-folder (surat permintaan, media, aset)
   step('folder Drive', () => {
     const f = DriveApp.getFoldersByName(FOLDER_NAME), root = f.hasNext() ? f.next() : DriveApp.createFolder(FOLDER_NAME);
     const sub = n => { const x = root.getFoldersByName(n); return x.hasNext() ? x.next() : root.createFolder(n); };
@@ -487,7 +493,6 @@ function setupAppEnvironment() {
     Logger.log('Folder: ' + root.getUrl());
   });
 
-  // 3. Sheet + header (aman dijalankan ulang)
   step('sheet & header', () => {
     Object.keys(H).forEach(n => {
       const sh = s.getSheetByName(n) || s.insertSheet(n);
@@ -496,14 +501,13 @@ function setupAppEnvironment() {
         sh.setFrozenRows(1);
       }
     });
-    s.getSheetByName('Pengguna').getRange('B:B').setNumberFormat('@'); // hash disimpan sebagai teks
-    s.getSheets().forEach(sh => { // buang sheet bawaan (nama bisa berbeda tergantung bahasa akun)
+    s.getSheetByName('Pengguna').getRange('B:B').setNumberFormat('@');
+    s.getSheets().forEach(sh => {
       if (!H[sh.getName()] && s.getSheets().length > 1 && sh.getLastRow() === 0) s.deleteSheet(sh);
     });
     SpreadsheetApp.flush();
   });
 
-  // 4. Akun awal + data contoh (hanya bila masih kosong) — WAJIB ganti password setelah login pertama
   step('akun & data contoh', () => {
     const pg = s.getSheetByName('Pengguna');
     if (pg.getLastRow() < 2) AKUN_AWAL.forEach(u => pg.appendRow([u[0], hash(u[0], u[1]), u[2], u[3]]));
@@ -517,7 +521,6 @@ function setupAppEnvironment() {
   return s.getUrl();
 }
 
-// Diagnostik: periksa kesiapan database
 function cekDatabase() {
   const s = ss();
   Logger.log('Versi kode: ' + APP_VERSION + ' | Spreadsheet: ' + s.getUrl());
@@ -525,7 +528,6 @@ function cekDatabase() {
   Logger.log('Folder surat: ' + (P.getProperty('suratId') ? 'ada' : 'TIDAK ADA'));
 }
 
-// Tulis ulang 3 akun awal (jalankan dari editor bila perlu)
 function resetAkunAwal() {
   const sh = ss().getSheetByName('Pengguna');
   if (!sh) throw new Error('Sheet Pengguna tidak ada. Jalankan setupAppEnvironment() dulu.');
@@ -537,12 +539,11 @@ function resetAkunAwal() {
   cekLogin('superadmin', 'superadmin123');
 }
 
-// Diagnostik login: cekLogin('admin','admin123') -> lihat Execution log
 function cekLogin(u, p) {
   Logger.log('Versi kode: ' + APP_VERSION + ' | Database: ' + ss().getUrl());
   const l = rows('Pengguna'), x = l.find(r => String(r.Username).trim().toLowerCase() === String(u).trim().toLowerCase());
   Logger.log('Akun terbaca (' + l.length + '): ' + l.map(r => r.Username).join(', '));
   if (!x) return Logger.log('HASIL: username "' + u + '" TIDAK ADA.');
   Logger.log('Hash tersimpan: ' + String(x.Hash).slice(0, 22) + '... | dihitung: ' + hash(u, p).slice(0, 22) + '...');
-  Logger.log('HASIL: ' + (String(x.Hash).trim() === hash(u, p) ? 'COCOK' : 'TIDAK COCOK (login akan memperbaiki otomatis bila memakai password awal)'));
+  Logger.log('HASIL: ' + (String(x.Hash).trim() === hash(u, p) ? 'COCOK' : 'TIDAK COCOK'));
 }
